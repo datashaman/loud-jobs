@@ -14,7 +14,7 @@ composer require datashaman/loud-jobs
 
 ## Usage
 
-`ProgressTracker` takes an emit callback and publishes a `Progress` value each time you advance a phase, tick an item counter, or attach a note.
+`ProgressTracker` takes an emit callback and publishes a `Progress` value each time you enter a phase, tick item progress, or attach a note. The method names follow Symfony's `ProgressBar` parlance: `phase()`, `advance()`, `setProgress()`, `setMaxSteps()`, `finish()`.
 
 ```php
 use Datashaman\LoudJobs\Support\Progress;
@@ -34,24 +34,36 @@ $tracker->defineSteps([
     'Uploading'    => 5,
 ]);
 
-$tracker->advance('Fetching');
-foreach ($rows as $i => $row) {
+$tracker->phase('Fetching', max: count($rows));
+foreach ($rows as $row) {
     // ...work...
-    $tracker->tick($i + 1, count($rows));
+    $tracker->advance();                         // +1 (or $tracker->advance(10))
 }
 
-$tracker->advance('Transforming');
+$tracker->phase('Transforming');                 // max unknown — item counts still flow
 $tracker->note('cache warmed', ['hit_rate' => 0.92]);
 
-$tracker->advance('Uploading');
-$tracker->tick(count($rows), count($rows));
+$tracker->phase('Uploading', max: $n);
+$tracker->setProgress($n);                       // absolute jump
+$tracker->finish();                              // force current phase to 100%
 ```
+
+### Methods
+
+- `defineSteps(array $steps)` — three shapes: `['A', 'B']` (equal weight), `['A' => 1, 'B' => 3]` (keyed), or `[['name' => 'A', 'weight' => 1], ...]` (explicit).
+- `phase(string $name, ?int $max = null)` — enter a phase and optionally set its item max. Resets item counters.
+- `advance(int $by = 1)` — tick forward by N items.
+- `setProgress(int $current)` — jump to an absolute item position within the phase.
+- `setMaxSteps(int $max)` — update or set the max mid-phase; recomputes the step fraction.
+- `finish()` — force the current phase to 100% of its weight (and snap `itemsProcessed` to `max` if set).
+- `note(string $message, array $meta = [])` — emit a message and meta without changing progress.
 
 ### Behaviour notes
 
 - Weights are **relative**. `[1, 3, 5]` and `[10, 30, 50]` emit identical percentages.
-- `advance()` with an unknown phase name is clamped to the last defined step — it won't run `step` past `totalSteps`.
-- `tick()` called before the first `advance()` is tolerated: `itemsProcessed` / `totalItems` flow through, but `percent`, `phase`, and `step` stay `null` until a phase is named.
+- `phase()` with an unknown name past the last defined step is clamped — it won't run `step` past `totalSteps`.
+- `advance()` / `setProgress()` / `setMaxSteps()` called before any `phase()` is tolerated: `itemsProcessed` / `totalItems` flow through, but `percent`, `phase`, and `step` stay `null` until a phase is named.
+- A phase without a `max` still accepts `advance()` calls — item counts flow, but the weighted percent only moves when you transition to the next phase or call `finish()`.
 - `etaMs` is computed from weighted elapsed time. It's `null` at 0% and 100%, and only as accurate as your weights.
 
 ## Testing

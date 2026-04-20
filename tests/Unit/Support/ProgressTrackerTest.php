@@ -10,154 +10,360 @@ function makeTracker(array &$emitted): ProgressTracker
     });
 }
 
-it('reports equal-weight progress linearly', function () {
-    $emitted = [];
-    $tracker = makeTracker($emitted);
-    $tracker->defineSteps(['A', 'B', 'C']);
+describe('defineSteps', function () {
+    it('accepts positional names with equal weights', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A', 'B', 'C']);
 
-    $tracker->advance('A');
-    $tracker->advance('B');
-    $tracker->advance('C');
-    $tracker->tick(1, 1);
+        $tracker->phase('A');
+        $tracker->phase('B');
+        $tracker->phase('C');
+        $tracker->finish();
 
-    $percents = array_map(fn (Progress $p) => $p->percent, $emitted);
+        expect(array_map(fn (Progress $p) => $p->percent, $emitted))
+            ->toBe([0.0, 33.3, 66.7, 100.0]);
+    });
 
-    expect($percents)->toBe([0.0, 33.3, 66.7, 100.0]);
+    it('accepts keyed weights', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A' => 1, 'B' => 2]);
+
+        $tracker->phase('A');
+        $tracker->phase('B');
+
+        expect(end($emitted)->percent)->toBe(33.3);
+    });
+
+    it('accepts explicit name/weight entries', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps([
+            ['name' => 'A', 'weight' => 1],
+            ['name' => 'B', 'weight' => 2],
+        ]);
+
+        $tracker->phase('A');
+        $tracker->phase('B');
+
+        expect(end($emitted)->percent)->toBe(33.3);
+    });
+
+    it('treats keyed and explicit forms as equivalent', function () {
+        $keyed = [];
+        $k = makeTracker($keyed);
+        $k->defineSteps(['A' => 1, 'B' => 2]);
+        $k->phase('A');
+        $k->phase('B');
+
+        $explicit = [];
+        $e = makeTracker($explicit);
+        $e->defineSteps([
+            ['name' => 'A', 'weight' => 1],
+            ['name' => 'B', 'weight' => 2],
+        ]);
+        $e->phase('A');
+        $e->phase('B');
+
+        expect(array_map(fn (Progress $p) => $p->percent, $keyed))
+            ->toBe(array_map(fn (Progress $p) => $p->percent, $explicit));
+    });
+
+    it('rejects non-positive weights', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A' => 0]);
+    })->throws(InvalidArgumentException::class);
+
+    it('rejects malformed entries', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps([['weight' => 1]]);
+    })->throws(InvalidArgumentException::class);
+
+    it('ignores weight ratio scale', function () {
+        $small = [];
+        $s = makeTracker($small);
+        $s->defineSteps(['A' => 1, 'B' => 3, 'C' => 5, 'D' => 2]);
+        $s->phase('A');
+        $s->phase('B');
+        $s->phase('C');
+
+        $big = [];
+        $b = makeTracker($big);
+        $b->defineSteps(['A' => 10, 'B' => 30, 'C' => 50, 'D' => 20]);
+        $b->phase('A');
+        $b->phase('B');
+        $b->phase('C');
+
+        expect(end($small)->percent)->toBe(end($big)->percent);
+    });
 });
 
-it('weights progress by step weight', function () {
-    $emitted = [];
-    $tracker = makeTracker($emitted);
-    $tracker->defineSteps(['A' => 1, 'B' => 3, 'C' => 5, 'D' => 2]);
+describe('phase()', function () {
+    it('enters a named phase and resets item counters', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A', 'B']);
 
-    $tracker->advance('A');
-    $tracker->advance('B');
-    $tracker->advance('C');
-    $tracker->tick(5, 10);
+        $tracker->phase('A', max: 10);
+        $tracker->advance(5);
+        $tracker->phase('B');
 
-    $last = end($emitted);
+        $last = end($emitted);
+        expect($last->phase)->toBe('B')
+            ->and($last->step)->toBe(2)
+            ->and($last->itemsProcessed)->toBe(0)
+            ->and($last->totalItems)->toBeNull();
+    });
 
-    expect($last->percent)->toBe(round(((1 + 3 + 2.5) / 11) * 100, 1));
+    it('accepts an optional max argument', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A']);
+
+        $tracker->phase('A', max: 50);
+
+        expect(end($emitted)->totalItems)->toBe(50);
+    });
+
+    it('clamps currentStep when advancing past the last defined step with an unknown name', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A', 'B']);
+
+        $tracker->phase('A');
+        $tracker->phase('B');
+        $tracker->phase('Unknown');
+
+        $last = end($emitted);
+        expect($last->step)->toBe(2)
+            ->and($last->totalSteps)->toBe(2)
+            ->and($last->phase)->toBe('Unknown');
+    });
+
+    it('honours named phases that jump to earlier steps', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A', 'B', 'C']);
+
+        $tracker->phase('C');
+        $tracker->phase('A');
+
+        $last = end($emitted);
+        expect($last->step)->toBe(1)->and($last->phase)->toBe('A');
+    });
 });
 
-it('clamps currentStep when advancing past the last defined step with an unknown phase', function () {
-    $emitted = [];
-    $tracker = makeTracker($emitted);
-    $tracker->defineSteps(['A', 'B']);
+describe('advance()', function () {
+    it('defaults to ticking by 1', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A']);
+        $tracker->phase('A', max: 4);
 
-    $tracker->advance('A');
-    $tracker->advance('B');
-    $tracker->advance('Unknown');
+        $tracker->advance();
+        $tracker->advance();
 
-    $last = end($emitted);
+        expect(end($emitted)->itemsProcessed)->toBe(2)
+            ->and(end($emitted)->percent)->toBe(50.0);
+    });
 
-    expect($last->step)->toBe(2)
-        ->and($last->totalSteps)->toBe(2)
-        ->and($last->phase)->toBe('Unknown');
+    it('accepts a custom step size', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A']);
+        $tracker->phase('A', max: 10);
+
+        $tracker->advance(3);
+        $tracker->advance(7);
+
+        expect(end($emitted)->itemsProcessed)->toBe(10)
+            ->and(end($emitted)->percent)->toBe(100.0);
+    });
+
+    it('without a max still increments itemsProcessed but leaves stepFraction at 0', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A' => 1, 'B' => 1]);
+
+        $tracker->phase('A');
+        $tracker->advance(5);
+
+        $last = end($emitted);
+        expect($last->itemsProcessed)->toBe(5)
+            ->and($last->totalItems)->toBeNull()
+            ->and($last->percent)->toBe(0.0);
+    });
+
+    it('called before any phase() emits item counts with null phase/percent/step', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A', 'B']);
+
+        $tracker->setMaxSteps(10);
+        $tracker->advance(5);
+
+        $last = end($emitted);
+        expect($last->phase)->toBeNull()
+            ->and($last->step)->toBeNull()
+            ->and($last->percent)->toBeNull()
+            ->and($last->itemsProcessed)->toBe(5)
+            ->and($last->totalItems)->toBe(10);
+    });
 });
 
-it('still honours named phases that point to earlier steps', function () {
-    $emitted = [];
-    $tracker = makeTracker($emitted);
-    $tracker->defineSteps(['A', 'B', 'C']);
+describe('setProgress()', function () {
+    it('jumps to an absolute item position within the phase', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A' => 1, 'B' => 3, 'C' => 5, 'D' => 2]);
 
-    $tracker->advance('C');
-    $tracker->advance('A');
+        $tracker->phase('A');
+        $tracker->phase('B');
+        $tracker->phase('C', max: 10);
+        $tracker->setProgress(5);
 
-    $last = end($emitted);
+        expect(end($emitted)->percent)
+            ->toBe(round(((1 + 3 + 2.5) / 11) * 100, 1));
+    });
 
-    expect($last->step)->toBe(1)
-        ->and($last->phase)->toBe('A');
+    it('clamps stepFraction at 1.0 when asked to exceed max', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A']);
+        $tracker->phase('A', max: 10);
+
+        $tracker->setProgress(1000);
+
+        expect(end($emitted)->percent)->toBe(100.0);
+    });
 });
 
-it('tolerates tick() called before any advance()', function () {
-    $emitted = [];
-    $tracker = makeTracker($emitted);
-    $tracker->defineSteps(['A', 'B']);
+describe('setMaxSteps()', function () {
+    it('updates the max mid-phase and recomputes stepFraction', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A']);
 
-    $tracker->tick(5, 10);
+        $tracker->phase('A');
+        $tracker->advance(5);
+        expect(end($emitted)->percent)->toBe(0.0);
 
-    $last = end($emitted);
-
-    expect($last->percent)->toBeNull()
-        ->and($last->phase)->toBeNull()
-        ->and($last->step)->toBeNull()
-        ->and($last->itemsProcessed)->toBe(5)
-        ->and($last->totalItems)->toBe(10);
+        $tracker->setMaxSteps(10);
+        expect(end($emitted)->percent)->toBe(50.0);
+    });
 });
 
-it('leaves ETA null at 0% and 100%', function () {
-    $emitted = [];
-    $tracker = makeTracker($emitted);
-    $tracker->defineSteps(['A', 'B']);
+describe('finish()', function () {
+    it('forces the current phase to 100% of its weight', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A', 'B']);
 
-    $tracker->advance('A');
-    $tracker->advance('B');
-    $tracker->tick(1, 1);
+        $tracker->phase('A');
+        $tracker->phase('B');
+        $tracker->finish();
 
-    expect($emitted[0]->etaMs)->toBeNull()
-        ->and(end($emitted)->etaMs)->toBeNull();
+        expect(end($emitted)->percent)->toBe(100.0);
+    });
+
+    it('snaps itemsProcessed to max when a max is set', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A']);
+        $tracker->phase('A', max: 42);
+
+        $tracker->finish();
+
+        expect(end($emitted)->itemsProcessed)->toBe(42)
+            ->and(end($emitted)->totalItems)->toBe(42);
+    });
+
+    it('is a no-op when called before any phase()', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A']);
+
+        $tracker->finish();
+
+        expect($emitted)->toBe([]);
+    });
 });
 
-it('produces a finite ETA mid-run', function () {
-    $emitted = [];
-    $tracker = makeTracker($emitted);
-    $tracker->defineSteps(['A', 'B', 'C', 'D']);
+describe('note()', function () {
+    it('emits a message and meta without changing progress', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A']);
 
-    $tracker->advance('A');
-    usleep(10_000);
-    $tracker->advance('B');
+        $tracker->phase('A', max: 10);
+        $tracker->advance(3);
+        $beforePercent = end($emitted)->percent;
 
-    $last = end($emitted);
+        $tracker->note('cache warmed', ['hit_rate' => 0.92]);
 
-    expect($last->etaMs)->toBeInt()->toBeGreaterThan(0);
+        $last = end($emitted);
+        expect($last->message)->toBe('cache warmed')
+            ->and($last->meta)->toBe(['hit_rate' => 0.92])
+            ->and($last->percent)->toBe($beforePercent);
+    });
 });
 
-it('treats keyed weights and explicit weights equivalently', function () {
-    $keyedEmitted = [];
-    $keyed = makeTracker($keyedEmitted);
-    $keyed->defineSteps(['A' => 1, 'B' => 2]);
-    $keyed->advance('A');
-    $keyed->advance('B');
+describe('ETA', function () {
+    it('is null at 0% and at 100%', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A', 'B']);
 
-    $explicitEmitted = [];
-    $explicit = makeTracker($explicitEmitted);
-    $explicit->defineSteps([
-        ['name' => 'A', 'weight' => 1],
-        ['name' => 'B', 'weight' => 2],
-    ]);
-    $explicit->advance('A');
-    $explicit->advance('B');
+        $tracker->phase('A');
+        expect($emitted[0]->etaMs)->toBeNull();
 
-    $keyedPercents = array_map(fn (Progress $p) => $p->percent, $keyedEmitted);
-    $explicitPercents = array_map(fn (Progress $p) => $p->percent, $explicitEmitted);
+        $tracker->phase('B');
+        $tracker->finish();
+        expect(end($emitted)->etaMs)->toBeNull();
+    });
 
-    expect($keyedPercents)->toBe($explicitPercents);
+    it('is a positive integer mid-run', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A', 'B', 'C', 'D']);
+
+        $tracker->phase('A');
+        usleep(10_000);
+        $tracker->phase('B');
+
+        expect(end($emitted)->etaMs)->toBeInt()->toBeGreaterThan(0);
+    });
 });
 
-it('rejects non-positive weights', function () {
-    $emitted = [];
-    $tracker = makeTracker($emitted);
-    $tracker->defineSteps(['A' => 0]);
-})->throws(InvalidArgumentException::class);
+describe('weighted progress', function () {
+    it('progresses linearly with equal weights', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A', 'B', 'C']);
 
-it('ignores weight ratio scale', function () {
-    $smallEmitted = [];
-    $small = makeTracker($smallEmitted);
-    $small->defineSteps(['A' => 1, 'B' => 3, 'C' => 5, 'D' => 2]);
-    $small->advance('A');
-    $small->advance('B');
-    $small->advance('C');
+        $tracker->phase('A');
+        $tracker->phase('B');
+        $tracker->phase('C');
+        $tracker->finish();
 
-    $bigEmitted = [];
-    $big = makeTracker($bigEmitted);
-    $big->defineSteps(['A' => 10, 'B' => 30, 'C' => 50, 'D' => 20]);
-    $big->advance('A');
-    $big->advance('B');
-    $big->advance('C');
+        expect(array_map(fn (Progress $p) => $p->percent, $emitted))
+            ->toBe([0.0, 33.3, 66.7, 100.0]);
+    });
 
-    $smallLast = end($smallEmitted);
-    $bigLast = end($bigEmitted);
+    it('weights percent by step weight when ticking within a phase', function () {
+        $emitted = [];
+        $tracker = makeTracker($emitted);
+        $tracker->defineSteps(['A' => 1, 'B' => 3, 'C' => 5, 'D' => 2]);
 
-    expect($smallLast->percent)->toBe($bigLast->percent);
+        $tracker->phase('A');
+        $tracker->phase('B');
+        $tracker->phase('C', max: 10);
+        $tracker->advance(5);
+
+        expect(end($emitted)->percent)
+            ->toBe(round(((1 + 3 + 2.5) / 11) * 100, 1));
+    });
 });

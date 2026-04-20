@@ -16,6 +16,10 @@ class ProgressTracker
 
     private ?string $phase = null;
 
+    private ?int $maxSteps = null;
+
+    private int $currentItems = 0;
+
     private float $startedAt;
 
     public function __construct(private Closure $emit)
@@ -56,9 +60,9 @@ class ProgressTracker
         $this->steps = $normalized;
     }
 
-    public function advance(string $phase): void
+    public function phase(string $name, ?int $max = null): void
     {
-        $idx = $this->findStep($phase);
+        $idx = $this->findStep($name);
 
         if ($idx !== null) {
             $this->currentStep = $idx;
@@ -66,26 +70,57 @@ class ProgressTracker
             $this->currentStep++;
         }
 
-        $this->phase = $phase;
+        $this->phase = $name;
+        $this->maxSteps = $max;
+        $this->currentItems = 0;
         $this->stepFraction = 0.0;
         $this->report();
     }
 
-    public function tick(int $done, int $total, ?string $message = null): void
+    public function advance(int $by = 1): void
+    {
+        $this->currentItems += $by;
+        $this->recomputeFraction();
+        $this->report();
+    }
+
+    public function setProgress(int $current): void
+    {
+        $this->currentItems = $current;
+        $this->recomputeFraction();
+        $this->report();
+    }
+
+    public function setMaxSteps(int $max): void
+    {
+        $this->maxSteps = $max;
+        $this->recomputeFraction();
+        $this->report();
+    }
+
+    public function finish(): void
     {
         if ($this->phase === null) {
-            $this->report(message: $message, done: $done, total: $total);
-
             return;
         }
 
-        $this->stepFraction = $total > 0 ? min($done / $total, 1.0) : 0.0;
-        $this->report(message: $message, done: $done, total: $total);
+        if ($this->maxSteps !== null) {
+            $this->currentItems = $this->maxSteps;
+        }
+        $this->stepFraction = 1.0;
+        $this->report();
     }
 
     public function note(string $message, array $meta = []): void
     {
         $this->report(message: $message, meta: $meta);
+    }
+
+    private function recomputeFraction(): void
+    {
+        if ($this->maxSteps !== null && $this->maxSteps > 0) {
+            $this->stepFraction = min($this->currentItems / $this->maxSteps, 1.0);
+        }
     }
 
     private function findStep(string $phase): ?int
@@ -99,14 +134,11 @@ class ProgressTracker
         return null;
     }
 
-    private function report(
-        ?string $message = null,
-        ?int $done = null,
-        ?int $total = null,
-        array $meta = [],
-    ): void {
+    private function report(?string $message = null, array $meta = []): void
+    {
         $totalSteps = count($this->steps) ?: null;
-        $percent = $totalSteps && $this->phase !== null ? $this->calculatePercent() : null;
+        $hasPhase = $this->phase !== null;
+        $percent = $totalSteps && $hasPhase ? $this->calculatePercent() : null;
 
         $elapsedMs = (int) ((microtime(true) - $this->startedAt) * 1000);
         $etaMs = $this->calculateEta($elapsedMs, $percent);
@@ -115,10 +147,10 @@ class ProgressTracker
             percent: $percent,
             phase: $this->phase,
             message: $message,
-            step: $totalSteps && $this->phase !== null ? $this->currentStep + 1 : null,
+            step: $totalSteps && $hasPhase ? $this->currentStep + 1 : null,
             totalSteps: $totalSteps,
-            itemsProcessed: $done,
-            totalItems: $total,
+            itemsProcessed: $hasPhase || $this->currentItems > 0 ? $this->currentItems : null,
+            totalItems: $this->maxSteps,
             elapsedMs: $elapsedMs,
             etaMs: $etaMs,
             meta: $meta,
