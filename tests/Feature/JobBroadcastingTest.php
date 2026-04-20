@@ -3,6 +3,7 @@
 use Datashaman\LoudJobs\Events\JobProgressed;
 use Datashaman\LoudJobs\Support\Progress;
 use Datashaman\LoudJobs\Support\ProgressTracker;
+use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Support\Facades\Event;
 
@@ -86,7 +87,7 @@ it('broadcasts on a public channel when private is false', function () {
 
     $event = new JobProgressed('reports.public', $progress, private: false);
 
-    expect($event->broadcastOn())->toBeInstanceOf(\Illuminate\Broadcasting\Channel::class)
+    expect($event->broadcastOn())->toBeInstanceOf(Channel::class)
         ->and($event->broadcastOn())->not->toBeInstanceOf(PrivateChannel::class);
 });
 
