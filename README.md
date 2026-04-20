@@ -14,41 +14,117 @@ composer require datashaman/loud-jobs
 
 ## Usage
 
-`ProgressTracker` takes an emit callback and publishes a `Progress` value each time you enter a phase, tick item progress, or attach a note. The method names follow Symfony's `ProgressBar` parlance: `phase()`, `advance()`, `setProgress()`, `setMaxSteps()`, `finish()`.
+`ProgressTracker` is meant to live inside a queued job. You wire it to an emit callback — typically `broadcast()` or `event()` — and it publishes a `Progress` value each time you enter a phase, tick item progress, or attach a note. Method names follow Symfony's `ProgressBar` parlance: `phase()`, `advance()`, `setProgress()`, `setMaxSteps()`, `finish()`.
+
+### Real-time progress in a queued job
+
+This is the intended flow: a queued job reports weighted, real-time progress to a browser via Laravel broadcasting. `loud-jobs` ships a `JobProgressed` event (implements `ShouldBroadcast`) so you don't have to write one.
 
 ```php
+// app/Jobs/ExportLargeReport.php
+
+namespace App\Jobs;
+
+use Datashaman\LoudJobs\Events\JobProgressed;
 use Datashaman\LoudJobs\Support\Progress;
 use Datashaman\LoudJobs\Support\ProgressTracker;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
 
+class ExportLargeReport implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public function __construct(public int $userId) {}
+
+    public function handle(): void
+    {
+        $channel = "reports.user.{$this->userId}";
+
+        $tracker = new ProgressTracker(function (Progress $p) use ($channel) {
+            broadcast(new JobProgressed($channel, $p));
+        });
+
+        $tracker->defineSteps([
+            'Fetching'     => 1,
+            'Transforming' => 3,
+            'Rendering'    => 5,
+            'Uploading'    => 2,
+        ]);
+
+        $rows = $this->fetch();
+        $tracker->phase('Fetching', max: count($rows));
+        foreach ($rows as $row) {
+            $this->fetchOne($row);
+            $tracker->advance();
+        }
+
+        $tracker->phase('Transforming', max: count($rows));
+        $tracker->note('cache warmed', ['hit_rate' => 0.92]);
+        foreach ($rows as $row) {
+            $this->transform($row);
+            $tracker->advance();
+        }
+
+        $tracker->phase('Rendering');
+        $pdf = $this->renderPdf($rows);
+
+        $tracker->phase('Uploading', max: $pdf->size());
+        $this->uploadInChunks($pdf, onChunk: fn (int $bytes) => $tracker->advance($bytes));
+        $tracker->finish();
+    }
+}
+```
+
+Authorise the channel in `routes/channels.php`:
+
+```php
+Broadcast::channel('reports.user.{userId}', function ($user, int $userId) {
+    return $user->id === $userId;
+});
+```
+
+Listen on the frontend with Laravel Echo (Reverb/Pusher/Ably — any Echo-compatible driver):
+
+```js
+// resources/js/progress.js
+import Echo from 'laravel-echo';
+
+Echo.private(`reports.user.${window.userId}`)
+    .listen('.job.progressed', (e) => {
+        // e is the broadcastWith() payload
+        updateBar(e.percent, e.phase, e.etaMs);
+        if (e.message) showToast(e.message, e.meta);
+    });
+```
+
+Each phase transition, `advance()`, `setProgress()`, `setMaxSteps()`, `finish()`, and `note()` inside the job emits a `JobProgressed` event carrying the full `Progress` snapshot — percent, phase, step, items, elapsed, ETA, message, meta.
+
+### `ProgressTracker` in isolation
+
+The tracker doesn't require broadcasting — any callback works. Useful for log lines, Horizon tags, cache writes, or tests:
+
+```php
 $tracker = new ProgressTracker(function (Progress $p) {
     logger()->info('job.progress', (array) $p);
 });
 
-// Equal weights — each phase is 1/3 of the run.
 $tracker->defineSteps(['Fetching', 'Transforming', 'Uploading']);
-
-// Or weight them — "uploading is 5x as slow as fetching".
-$tracker->defineSteps([
-    'Fetching'     => 1,
-    'Transforming' => 3,
-    'Uploading'    => 5,
-]);
-
 $tracker->phase('Fetching', max: count($rows));
 foreach ($rows as $row) {
-    // ...work...
-    $tracker->advance();                         // +1 (or $tracker->advance(10))
+    $tracker->advance();
 }
-
 $tracker->phase('Transforming');                 // max unknown — item counts still flow
 $tracker->note('cache warmed', ['hit_rate' => 0.92]);
-
 $tracker->phase('Uploading', max: $n);
 $tracker->setProgress($n);                       // absolute jump
 $tracker->finish();                              // force current phase to 100%
 ```
 
-### Methods
+### `ProgressTracker` methods
 
 - `defineSteps(array $steps)` — three shapes: `['A', 'B']` (equal weight), `['A' => 1, 'B' => 3]` (keyed), or `[['name' => 'A', 'weight' => 1], ...]` (explicit).
 - `phase(string $name, ?int $max = null)` — enter a phase and optionally set its item max. Resets item counters.
@@ -57,6 +133,20 @@ $tracker->finish();                              // force current phase to 100%
 - `setMaxSteps(int $max)` — update or set the max mid-phase; recomputes the step fraction.
 - `finish()` — force the current phase to 100% of its weight (and snap `itemsProcessed` to `max` if set).
 - `note(string $message, array $meta = [])` — emit a message and meta without changing progress.
+
+### `JobProgressed` event
+
+`Datashaman\LoudJobs\Events\JobProgressed` implements `ShouldBroadcast` and carries the full `Progress` on the wire.
+
+```php
+new JobProgressed(
+    channel: "reports.user.{$userId}",   // channel name (without the "private-" prefix)
+    progress: $progress,                  // the Progress snapshot from the tracker
+    private: true,                        // false for a public Channel
+);
+```
+
+Broadcasts as `job.progressed`. The payload (`broadcastWith()`) mirrors the `Progress` fields: `percent`, `phase`, `message`, `step`, `totalSteps`, `itemsProcessed`, `totalItems`, `elapsedMs`, `etaMs`, `meta`.
 
 ### Behaviour notes
 
