@@ -1,17 +1,17 @@
 {
-    "name": ":vendor_slug/:package_slug",
-    "description": ":package_description",
+    "name": "datashaman/loud-jobs",
+    "description": "Structured progress reporting for Laravel queued jobs — weighted phases, per-item ticks, ETA.",
     "keywords": [
-        ":vendor_name",
+        "datashaman",
         "laravel",
-        ":package_slug"
+        "loud-jobs"
     ],
-    "homepage": "https://github.com/:vendor_slug/:package_slug",
+    "homepage": "https://github.com/datashaman/loud-jobs",
     "license": "MIT",
     "authors": [
         {
-            "name": ":author_name",
-            "email": "author@domain.com",
+            "name": "Marlin Forbes",
+            "email": "marlinf@datashaman.com",
             "role": "Developer"
         }
     ],
@@ -35,13 +35,13 @@
     },
     "autoload": {
         "psr-4": {
-            "VendorName\\Skeleton\\": "src/",
-            "VendorName\\Skeleton\\Database\\Factories\\": "database/factories/"
+            "Datashaman\\LoudJobs\\": "src/",
+            "Datashaman\\LoudJobs\\Database\\Factories\\": "database/factories/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "VendorName\\Skeleton\\Tests\\": "tests/",
+            "Datashaman\\LoudJobs\\Tests\\": "tests/",
             "Workbench\\App\\": "workbench/app/"
         }
     },
@@ -63,10 +63,10 @@
     "extra": {
         "laravel": {
             "providers": [
-                "VendorName\\Skeleton\\SkeletonServiceProvider"
+                "Datashaman\\LoudJobs\\LoudJobsServiceProvider"
             ],
             "aliases": {
-                "Skeleton": "VendorName\\Skeleton\\Facades\\Skeleton"
+                "LoudJobs": "Datashaman\\LoudJobs\\Facades\\LoudJobs"
             }
         }
     },

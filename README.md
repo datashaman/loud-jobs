@@ -1,69 +1,58 @@
-# :package_description
+# loud-jobs
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/:vendor_slug/:package_slug.svg?style=flat-square)](https://packagist.org/packages/:vendor_slug/:package_slug)
-[![GitHub Tests Action Status](https://img.shields.io/github/actions/workflow/status/:vendor_slug/:package_slug/run-tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/:vendor_slug/:package_slug/actions?query=workflow%3Arun-tests+branch%3Amain)
-[![GitHub Code Style Action Status](https://img.shields.io/github/actions/workflow/status/:vendor_slug/:package_slug/fix-php-code-style-issues.yml?branch=main&label=code%20style&style=flat-square)](https://github.com/:vendor_slug/:package_slug/actions?query=workflow%3A"Fix+PHP+code+style+issues"+branch%3Amain)
-[![Total Downloads](https://img.shields.io/packagist/dt/:vendor_slug/:package_slug.svg?style=flat-square)](https://packagist.org/packages/:vendor_slug/:package_slug)
-<!--delete-->
----
-This repo can be used to scaffold a Laravel package. Follow these steps to get started:
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/datashaman/loud-jobs.svg?style=flat-square)](https://packagist.org/packages/datashaman/loud-jobs)
+[![GitHub Tests Action Status](https://img.shields.io/github/actions/workflow/status/datashaman/loud-jobs/run-tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/datashaman/loud-jobs/actions?query=workflow%3Arun-tests+branch%3Amain)
+[![Total Downloads](https://img.shields.io/packagist/dt/datashaman/loud-jobs.svg?style=flat-square)](https://packagist.org/packages/datashaman/loud-jobs)
 
-1. Press the "Use this template" button at the top of this repo to create a new repo with the contents of this skeleton.
-2. Run "php ./configure.php" to run a script that will replace all placeholders throughout all the files.
-3. Have fun creating your package.
-4. If you need help creating a package, consider picking up our <a href="https://laravelpackage.training">Laravel Package Training</a> video course.
----
-<!--/delete-->
-This is where your description should go. Limit it to a paragraph or two. Consider adding a small example.
-
-## Support us
-
-[<img src="https://github-ads.s3.eu-central-1.amazonaws.com/:package_name.jpg?t=1" width="419px" />](https://spatie.be/github-ad-click/:package_name)
-
-We invest a lot of resources into creating [best in class open source packages](https://spatie.be/open-source). You can support us by [buying one of our paid products](https://spatie.be/open-source/support-us).
-
-We highly appreciate you sending us a postcard from your hometown, mentioning which of our package(s) you are using. You'll find our address on [our contact page](https://spatie.be/about-us). We publish all received postcards on [our virtual postcard wall](https://spatie.be/open-source/postcards).
+Structured progress reporting for Laravel queued jobs. Define weighted phases, tick through per-item work, and emit structured `Progress` events (percent, phase, step, items, elapsed, ETA) to any callback — logs, broadcasting, Horizon metadata, cache, or your own sink.
 
 ## Installation
 
-You can install the package via composer:
-
 ```bash
-composer require :vendor_slug/:package_slug
-```
-
-You can publish and run the migrations with:
-
-```bash
-php artisan vendor:publish --tag=":package_slug-migrations"
-php artisan migrate
-```
-
-You can publish the config file with:
-
-```bash
-php artisan vendor:publish --tag=":package_slug-config"
-```
-
-This is the contents of the published config file:
-
-```php
-return [
-];
-```
-
-Optionally, you can publish the views using
-
-```bash
-php artisan vendor:publish --tag=":package_slug-views"
+composer require datashaman/loud-jobs
 ```
 
 ## Usage
 
+`ProgressTracker` takes an emit callback and publishes a `Progress` value each time you advance a phase, tick an item counter, or attach a note.
+
 ```php
-$:variable = new VendorName\Skeleton();
-echo $:variable->echoPhrase('Hello, VendorName!');
+use Datashaman\LoudJobs\Support\Progress;
+use Datashaman\LoudJobs\Support\ProgressTracker;
+
+$tracker = new ProgressTracker(function (Progress $p) {
+    logger()->info('job.progress', (array) $p);
+});
+
+// Equal weights — each phase is 1/3 of the run.
+$tracker->defineSteps(['Fetching', 'Transforming', 'Uploading']);
+
+// Or weight them — "uploading is 5x as slow as fetching".
+$tracker->defineSteps([
+    'Fetching'     => 1,
+    'Transforming' => 3,
+    'Uploading'    => 5,
+]);
+
+$tracker->advance('Fetching');
+foreach ($rows as $i => $row) {
+    // ...work...
+    $tracker->tick($i + 1, count($rows));
+}
+
+$tracker->advance('Transforming');
+$tracker->note('cache warmed', ['hit_rate' => 0.92]);
+
+$tracker->advance('Uploading');
+$tracker->tick(count($rows), count($rows));
 ```
+
+### Behaviour notes
+
+- Weights are **relative**. `[1, 3, 5]` and `[10, 30, 50]` emit identical percentages.
+- `advance()` with an unknown phase name is clamped to the last defined step — it won't run `step` past `totalSteps`.
+- `tick()` called before the first `advance()` is tolerated: `itemsProcessed` / `totalItems` flow through, but `percent`, `phase`, and `step` stay `null` until a phase is named.
+- `etaMs` is computed from weighted elapsed time. It's `null` at 0% and 100%, and only as accurate as your weights.
 
 ## Testing
 
@@ -73,21 +62,17 @@ composer test
 
 ## Changelog
 
-Please see [CHANGELOG](CHANGELOG.md) for more information on what has changed recently.
+See [CHANGELOG.md](CHANGELOG.md).
 
-## Contributing
-
-Please see [CONTRIBUTING](CONTRIBUTING.md) for details.
-
-## Security Vulnerabilities
+## Security
 
 Please review [our security policy](../../security/policy) on how to report security vulnerabilities.
 
 ## Credits
 
-- [:author_name](https://github.com/:author_username)
+- [Marlin Forbes](https://github.com/datashaman)
 - [All Contributors](../../contributors)
 
 ## License
 
-The MIT License (MIT). Please see [License File](LICENSE.md) for more information.
+The MIT License (MIT). See [LICENSE.md](LICENSE.md).
